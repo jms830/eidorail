@@ -1,4 +1,4 @@
-import { createSignal, Show, onMount } from "solid-js"
+import { createSignal, Show, onMount, onCleanup } from "solid-js"
 import type { TabInfo } from "../../utils/browser-context"
 import { canCaptureUrl, getAllWindowsTabs, formatTabTree } from "../../utils/browser-context"
 import { formatScreenshot } from "../../utils/markdown-converter"
@@ -16,6 +16,21 @@ export function ContextBar() {
   const [errorMessage, setErrorMessage] = createSignal<string | null>(null)
   const [showCopiedToast, setShowCopiedToast] = createSignal(false)
 
+  const timeouts = new Set<number>()
+
+  function schedule(fn: () => void, ms: number) {
+    const id = window.setTimeout(() => {
+      timeouts.delete(id)
+      fn()
+    }, ms)
+    timeouts.add(id)
+  }
+
+  onCleanup(() => {
+    for (const id of timeouts) clearTimeout(id)
+    timeouts.clear()
+  })
+
   onMount(async () => {
     const response = await chrome.runtime.sendMessage({ type: "GET_CURRENT_TAB" })
     if (response?.tab) {
@@ -30,7 +45,7 @@ export function ContextBar() {
   })
 
   function resetState(setter: (s: CaptureState) => void) {
-    setTimeout(() => setter("idle"), 1500)
+    schedule(() => setter("idle"), 1500)
   }
 
   async function handleScreenshot() {
@@ -134,7 +149,7 @@ export function ContextBar() {
     try {
       await navigator.clipboard.writeText(text)
       setShowCopiedToast(true)
-      setTimeout(() => setShowCopiedToast(false), 1500)
+      schedule(() => setShowCopiedToast(false), 1500)
     } catch (err) {
       console.warn("[ContextBar] Clipboard write failed:", err)
       setErrorMessage("Clipboard access denied")

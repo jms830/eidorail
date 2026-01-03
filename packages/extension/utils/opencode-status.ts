@@ -1,3 +1,5 @@
+import { checkNoCorsReachable } from "./reachability"
+
 /**
  * OpenCode Status Utility
  * Checks if OpenCode server is running and handles connection state
@@ -20,11 +22,9 @@ const MODE_STORAGE_KEY = "eidorail-opencode-mode" // "local" | "remote"
 
 export type ConnectionMode = "local" | "remote"
 
-/**
- * Get connection mode (local port scanning vs remote URL)
- */
 export function getConnectionMode(): ConnectionMode {
-  return (localStorage.getItem(MODE_STORAGE_KEY) as ConnectionMode) || "local"
+  const stored = localStorage.getItem(MODE_STORAGE_KEY)
+  return stored === "local" || stored === "remote" ? stored : "local"
 }
 
 /**
@@ -86,21 +86,10 @@ function base64Encode(str: string): string {
 }
 
 export function getOpenCodeUrl(): string {
-  let baseUrl: string
-  if (getConnectionMode() === "remote") {
-    baseUrl = getRemoteUrl()
-  } else {
-    baseUrl = `http://localhost:${getOpenCodePort()}`
-  }
+  const baseUrl = getConnectionMode() === "remote" ? getRemoteUrl() : `http://localhost:${getOpenCodePort()}`
 
-  let path = ""
-  if (isWorkspaceEnabled()) {
-    const workspace = getWorkspaceDirectory()
-    if (workspace) {
-      const encodedPath = base64Encode(workspace)
-      path = `/${encodedPath}/session`
-    }
-  }
+  const workspace = isWorkspaceEnabled() ? getWorkspaceDirectory() : ""
+  const path = workspace ? `/${base64Encode(workspace)}/session` : ""
 
   return `${baseUrl}${path}?eidorail=compact`
 }
@@ -110,21 +99,7 @@ export function getOpenCodeUrl(): string {
  * Returns true if server responds (even with CORS error)
  */
 async function checkPort(port: number): Promise<boolean> {
-  const url = `http://localhost:${port}`
-
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), CHECK_TIMEOUT)
-
-    fetch(url, { mode: "no-cors", cache: "no-store" })
-      .then(() => {
-        clearTimeout(timeout)
-        resolve(true)
-      })
-      .catch(() => {
-        clearTimeout(timeout)
-        resolve(false)
-      })
-  })
+  return checkNoCorsReachable(`http://localhost:${port}`, CHECK_TIMEOUT)
 }
 
 /**
@@ -160,19 +135,7 @@ async function scanForOpenCode(): Promise<number | null> {
  * Check if a URL is reachable
  */
 export async function checkUrl(url: string): Promise<boolean> {
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), CHECK_TIMEOUT)
-
-    fetch(url, { mode: "no-cors", cache: "no-store" })
-      .then(() => {
-        clearTimeout(timeout)
-        resolve(true)
-      })
-      .catch(() => {
-        clearTimeout(timeout)
-        resolve(false)
-      })
-  })
+  return checkNoCorsReachable(url, CHECK_TIMEOUT)
 }
 
 /**

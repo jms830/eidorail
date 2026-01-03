@@ -95,7 +95,18 @@ export const PLATFORMS: Record<Platform, PlatformConfig> = {
  * Detect platform from a URL or hostname
  */
 export function detectPlatform(url?: string): Platform | null {
-  const hostname = url ? new URL(url).hostname : typeof window !== "undefined" ? window.location.hostname : null
+  let hostname: string | null = null
+  if (url) {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null
+      hostname = parsed.hostname
+    } catch {
+      return null
+    }
+  } else if (typeof window !== "undefined") {
+    hostname = window.location.hostname
+  }
 
   if (!hostname) return null
 
@@ -112,7 +123,18 @@ export function detectPlatform(url?: string): Platform | null {
  * Get conversation ID from URL based on platform
  */
 export function getConversationId(platform: Platform, url?: string): string | null {
-  const pathname = url ? new URL(url).pathname : typeof window !== "undefined" ? window.location.pathname : null
+  let pathname: string | null = null
+  if (url) {
+    try {
+      const parsed = new URL(url)
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null
+      pathname = parsed.pathname
+    } catch {
+      return null
+    }
+  } else if (typeof window !== "undefined") {
+    pathname = window.location.pathname
+  }
 
   if (!pathname) return null
 

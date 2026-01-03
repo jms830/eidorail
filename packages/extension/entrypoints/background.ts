@@ -288,24 +288,32 @@ export default defineBackground(() => {
   console.log("[Eidorail] Background service worker started")
 
   // Open sidepanel when extension icon is clicked
-  chrome.action.onClicked.addListener(async (tab) => {
-    if (tab.id) {
-      await chrome.sidePanel.open({ tabId: tab.id })
-    }
+  chrome.action.onClicked.addListener((tab) => {
+    if (!tab.id) return
+    chrome.sidePanel.open({ tabId: tab.id }).catch((error) => {
+      console.warn("[Eidorail] Failed to open sidepanel:", error)
+    })
   })
 
   // Handle keyboard commands
-  chrome.commands.onCommand.addListener(async (command) => {
-    if (command === "toggle-side-panel") {
-      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
-      if (tab?.id) {
-        await chrome.sidePanel.open({ tabId: tab.id })
-      }
-    }
+  chrome.commands.onCommand.addListener((command) => {
+    if (command !== "toggle-side-panel") return
+
+    chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then(([tab]) => {
+        if (!tab?.id) return
+        return chrome.sidePanel.open({ tabId: tab.id })
+      })
+      .catch((error) => {
+        console.warn("[Eidorail] Failed to toggle sidepanel:", error)
+      })
   })
 
   // Set sidepanel behavior to open on action click
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
+    console.warn("[Eidorail] Failed to set sidepanel behavior:", error)
+  })
 
   // Listen for messages from sidepanel or content scripts
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -313,9 +321,14 @@ export default defineBackground(() => {
 
     switch (message.type) {
       case "GET_CURRENT_TAB":
-        chrome.tabs.query({ active: true, currentWindow: true }).then(([tab]) => {
-          sendResponse({ tab })
-        })
+        chrome.tabs
+          .query({ active: true, currentWindow: true })
+          .then(([tab]) => {
+            sendResponse({ tab })
+          })
+          .catch((error) => {
+            sendResponse({ error: error instanceof Error ? error.message : String(error) })
+          })
         return true // Will respond asynchronously
 
       case "CAPTURE_SCREENSHOT":

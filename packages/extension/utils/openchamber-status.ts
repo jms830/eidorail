@@ -1,3 +1,5 @@
+import { checkNoCorsReachable } from "./reachability"
+
 /**
  * OpenChamber Status Utility
  * Checks if OpenChamber server is running and handles connection state
@@ -36,7 +38,8 @@ export function setOpenChamberExtraArgs(value: string): void {
  * Get OpenChamber connection mode (local port vs remote URL)
  */
 export function getOpenChamberConnectionMode(): OpenChamberConnectionMode {
-  return (localStorage.getItem(OPENCHAMBER_MODE_KEY) as OpenChamberConnectionMode) || "local"
+  const stored = localStorage.getItem(OPENCHAMBER_MODE_KEY)
+  return stored === "local" || stored === "remote" ? stored : "local"
 }
 
 /**
@@ -88,21 +91,7 @@ export function getOpenChamberUrl(): string {
  * Check if a specific port has OpenChamber running
  */
 async function checkOpenChamberPort(port: number): Promise<boolean> {
-  const url = `http://localhost:${port}`
-
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => resolve(false), OPENCHAMBER_CHECK_TIMEOUT)
-
-    fetch(url, { mode: "no-cors", cache: "no-store" })
-      .then(() => {
-        clearTimeout(timeout)
-        resolve(true)
-      })
-      .catch(() => {
-        clearTimeout(timeout)
-        resolve(false)
-      })
-  })
+  return checkNoCorsReachable(`http://localhost:${port}`, OPENCHAMBER_CHECK_TIMEOUT)
 }
 
 /**
@@ -115,18 +104,7 @@ export async function checkOpenChamberStatus(): Promise<boolean> {
     const remoteUrl = getOpenChamberRemoteUrl()
     if (!remoteUrl) return false
 
-    return new Promise((resolve) => {
-      const timeout = setTimeout(() => resolve(false), OPENCHAMBER_CHECK_TIMEOUT)
-      fetch(remoteUrl, { mode: "no-cors", cache: "no-store" })
-        .then(() => {
-          clearTimeout(timeout)
-          resolve(true)
-        })
-        .catch(() => {
-          clearTimeout(timeout)
-          resolve(false)
-        })
-    })
+    return checkNoCorsReachable(remoteUrl, OPENCHAMBER_CHECK_TIMEOUT)
   }
 
   // Local mode: check configured port
