@@ -25,6 +25,19 @@ import {
   setWorkspaceDirectory,
   type ConnectionMode,
 } from "../utils/opencode-status"
+import {
+  getOpenChamberPort,
+  saveOpenChamberPort,
+  getOpenChamberConnectionMode,
+  setOpenChamberConnectionMode,
+  getOpenChamberRemoteUrl,
+  setOpenChamberRemoteUrl,
+  getOpenChamberTryCfTunnel,
+  setOpenChamberTryCfTunnel,
+  getOpenChamberExtraArgs,
+  setOpenChamberExtraArgs,
+  type OpenChamberConnectionMode,
+} from "../utils/openchamber-status"
 
 interface SettingsPanelProps {
   isModal?: boolean
@@ -49,6 +62,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [isScanning, setIsScanning] = createSignal(false)
   const [scanResult, setScanResult] = createSignal<string | null>(null)
 
+  const [openChamberMode, setOpenChamberMode] = createSignal<OpenChamberConnectionMode>(getOpenChamberConnectionMode())
+  const [openChamberPort, setOpenChamberPortState] = createSignal(String(getOpenChamberPort()))
+  const [openChamberUrl, setOpenChamberUrlState] = createSignal(getOpenChamberRemoteUrl())
+  const [openChamberTryCfTunnel, setOpenChamberTryCfTunnelState] = createSignal(getOpenChamberTryCfTunnel())
+  const [openChamberExtraArgs, setOpenChamberExtraArgsState] = createSignal(getOpenChamberExtraArgs())
+
   onMount(async () => {
     const connected = await checkOpenCodeStatus()
     setOpenCodeStatus(connected ? "connected" : "disconnected")
@@ -66,6 +85,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
     props.onPlatformsChange?.(p)
   }
 
+  function previewOpenChamberCommand() {
+    const base = `openchamber --port ${openChamberPort().trim() || String(getOpenChamberPort())}`
+    const maybeTunnel = openChamberTryCfTunnel() ? "--try-cf-tunnel" : ""
+    const extra = openChamberExtraArgs().trim()
+    return [base, maybeTunnel, extra].filter(Boolean).join(" ")
+  }
+
   async function saveConnectionSettings() {
     setConnectionMode(connectionMode())
     if (connectionMode() === "local") {
@@ -76,6 +102,20 @@ export function SettingsPanel(props: SettingsPanelProps) {
     } else {
       setRemoteUrl(remoteUrl())
     }
+
+    setOpenChamberConnectionMode(openChamberMode())
+    if (openChamberMode() === "local") {
+      const port = parseInt(openChamberPort(), 10)
+      if (!isNaN(port) && port > 0 && port < 65536) {
+        saveOpenChamberPort(port)
+      }
+    } else {
+      setOpenChamberRemoteUrl(openChamberUrl())
+    }
+
+    setOpenChamberTryCfTunnel(openChamberTryCfTunnel())
+    setOpenChamberExtraArgs(openChamberExtraArgs())
+
     updateOpenCodeUrl()
     await handleRetry()
     triggerToast("Connection settings saved")
@@ -373,6 +413,69 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 </div>
               </div>
             </Show>
+
+            <div class="settings-section">
+              <h3>OpenChamber UI</h3>
+              <div class="connection-mode-tabs">
+                <button
+                  class={`mode-tab ${openChamberMode() === "local" ? "active" : ""}`}
+                  onClick={() => setOpenChamberMode("local")}
+                >
+                  Local
+                </button>
+                <button
+                  class={`mode-tab ${openChamberMode() === "remote" ? "active" : ""}`}
+                  onClick={() => setOpenChamberMode("remote")}
+                >
+                  Remote
+                </button>
+              </div>
+              <div class="connection-form" style="margin-top: 12px;">
+                <Show when={openChamberMode() === "local"}>
+                  <label>Port</label>
+                  <input
+                    type="number"
+                    placeholder="4097"
+                    value={openChamberPort()}
+                    onInput={(e) => setOpenChamberPortState(e.currentTarget.value)}
+                  />
+                  <p class="setting-hint">
+                    Start with: <code>{previewOpenChamberCommand()}</code>
+                  </p>
+
+                  <label class="toggle-row" style="margin-top: 12px;">
+                    <span class="toggle-label">Use Cloudflare Tunnel (--try-cf-tunnel)</span>
+                    <input
+                      type="checkbox"
+                      class="toggle-checkbox"
+                      checked={openChamberTryCfTunnel()}
+                      onChange={(e) => setOpenChamberTryCfTunnelState(e.currentTarget.checked)}
+                    />
+                  </label>
+
+                  <label style="display: block; margin-top: 12px;">Extra args</label>
+                  <input
+                    type="text"
+                    placeholder="--host 0.0.0.0"
+                    value={openChamberExtraArgs()}
+                    onInput={(e) => setOpenChamberExtraArgsState(e.currentTarget.value)}
+                  />
+                  <p class="setting-hint">Saved and applied when you click Save & Connect.</p>
+                </Show>
+                <Show when={openChamberMode() === "remote"}>
+                  <label>OpenChamber URL</label>
+                  <input
+                    type="text"
+                    placeholder="https://your-openchamber.example.com"
+                    value={openChamberUrl()}
+                    onInput={(e) => setOpenChamberUrlState(e.currentTarget.value)}
+                  />
+                  <p class="setting-hint">
+                    Use --try-cf-tunnel with cloudflared for remote access via Cloudflare Tunnel.
+                  </p>
+                </Show>
+              </div>
+            </div>
 
             <div class="settings-section">
               <h3>Workspace Context</h3>
