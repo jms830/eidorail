@@ -133,6 +133,9 @@ export function SettingsPanel(props: SettingsPanelProps) {
   }
 
   async function startOpenChamberViaPty() {
+    if (openCodeStatus() === "checking") {
+      await checkBothServices()
+    }
     if (openCodeStatus() !== "connected") {
       triggerToast("Start OpenCode first!")
       return
