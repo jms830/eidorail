@@ -57,6 +57,9 @@ function App() {
     if (!loadedIframes().has(platformId)) {
       setLoadedIframes((prev) => new Set([...prev, platformId]))
     }
+    if (platformId === "opencode" && connectionState() !== "connected") {
+      checkConnections()
+    }
   }
 
   function openExternal() {
