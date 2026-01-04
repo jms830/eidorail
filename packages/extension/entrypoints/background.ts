@@ -40,7 +40,30 @@ async function captureScreenshot(tabId?: number): Promise<{ screenshot?: string;
   }
 }
 
+async function ensureTabLoaded(tabId: number): Promise<{ ok: boolean; error?: string }> {
+  const tab = await chrome.tabs.get(tabId)
+  if (!tab.discarded) return { ok: true }
+
+  await chrome.tabs.update(tabId, { active: true })
+  return new Promise((resolve) => {
+    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updatedTabId === tabId && info.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener)
+        resolve({ ok: true })
+      }
+    }
+    chrome.tabs.onUpdated.addListener(listener)
+    setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener)
+      resolve({ ok: false, error: "Tab reload timed out" })
+    }, 10000)
+  })
+}
+
 async function capturePageMarkdown(tabId: number): Promise<{ markdown?: string; error?: string }> {
+  const loaded = await ensureTabLoaded(tabId)
+  if (!loaded.ok) return { error: loaded.error }
+
   try {
     const result = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_PAGE_CONTENT" })
     if (result?.success && result.markdown) {
@@ -66,6 +89,9 @@ async function capturePageMarkdown(tabId: number): Promise<{ markdown?: string; 
 }
 
 async function captureSelectionMarkdown(tabId: number): Promise<{ markdown?: string; error?: string }> {
+  const loaded = await ensureTabLoaded(tabId)
+  if (!loaded.ok) return { error: loaded.error }
+
   try {
     const result = await chrome.tabs.sendMessage(tabId, { type: "EXTRACT_SELECTION" })
     if (result?.success && result.markdown) {
@@ -122,6 +148,9 @@ function restoreScrollScript(x: number, y: number): void {
 }
 
 async function captureFullPageScreenshot(tabId: number): Promise<{ screenshot?: string; error?: string }> {
+  const loaded = await ensureTabLoaded(tabId)
+  if (!loaded.ok) return { error: loaded.error }
+
   try {
     const tab = await chrome.tabs.get(tabId)
     if (!tab.active) {
@@ -349,13 +378,19 @@ export default defineBackground(() => {
 
       case "GET_PAGE_CONTENT":
         if (message.tabId) {
-          chrome.scripting
-            .executeScript({
-              target: { tabId: message.tabId },
-              func: () => document.body.innerText,
+          ensureTabLoaded(message.tabId)
+            .then((loaded) => {
+              if (!loaded.ok) {
+                sendResponse({ error: loaded.error })
+                return
+              }
+              return chrome.scripting.executeScript({
+                target: { tabId: message.tabId },
+                func: () => document.body.innerText,
+              })
             })
             .then((results) => {
-              sendResponse({ content: results[0]?.result || "" })
+              if (results) sendResponse({ content: results[0]?.result || "" })
             })
             .catch((error) => {
               sendResponse({ error: error.message })
