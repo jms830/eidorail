@@ -197,10 +197,12 @@ async function captureFullPageScreenshot(tabId: number): Promise<{ screenshot?: 
           args: [scrollX, scrollY],
         })
 
-        await new Promise((r) => setTimeout(r, 100))
+        await new Promise((r) => setTimeout(r, 150))
 
         const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId!, { format: "png" })
         tiles.push({ dataUrl, x: scrollX, y: scrollY })
+
+        await new Promise((r) => setTimeout(r, 400))
       }
     }
 
