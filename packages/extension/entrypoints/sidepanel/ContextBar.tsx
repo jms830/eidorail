@@ -1,7 +1,6 @@
 import { createSignal, Show, onMount, onCleanup } from "solid-js"
 import type { TabInfo } from "../../utils/browser-context"
 import { canCaptureUrl, getAllWindowsTabs, formatTabTree } from "../../utils/browser-context"
-import { formatScreenshot } from "../../utils/markdown-converter"
 import { TabPicker } from "./TabPicker"
 
 type CaptureState = "idle" | "loading" | "success" | "error"
@@ -69,8 +68,7 @@ export function ContextBar() {
     }
 
     if (response?.screenshot) {
-      const markdown = formatScreenshot({ title: tab.title, dataUrl: response.screenshot })
-      await copyToClipboard(markdown)
+      await copyImageToClipboard(response.screenshot)
       setScreenshotState("success")
       resetState(setScreenshotState)
     }
@@ -154,6 +152,20 @@ export function ContextBar() {
       console.warn("[ContextBar] Clipboard write failed:", err)
       setErrorMessage("Clipboard access denied")
       resetState(setSelectionState)
+      resetState(setScreenshotState)
+    }
+  }
+
+  async function copyImageToClipboard(dataUrl: string) {
+    try {
+      const response = await fetch(dataUrl)
+      const blob = await response.blob()
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+      setShowCopiedToast(true)
+      schedule(() => setShowCopiedToast(false), 1500)
+    } catch (err) {
+      console.warn("[ContextBar] Image clipboard write failed:", err)
+      setErrorMessage("Clipboard access denied")
       resetState(setScreenshotState)
     }
   }
