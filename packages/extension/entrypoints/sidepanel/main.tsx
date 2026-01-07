@@ -8,14 +8,17 @@ import { type Platform, getIcon, loadPlatforms } from "../../utils/shared"
 import { SettingsPanel } from "../../components/SettingsPanel"
 import { ContextBar } from "./ContextBar"
 import { getOpenCodePort } from "../../utils/opencode-status"
+import { getSettingsFromLocalStorage, initStorageFromLocalStorage } from "../../utils/platform-storage"
 
 type ConnectionState = "checking" | "opencode-missing" | "openchamber-missing" | "connected"
 
 function App() {
+  const settings = getSettingsFromLocalStorage()
   const [platforms, setPlatforms] = createSignal<Platform[]>(loadPlatforms())
-  const [currentView, setCurrentView] = createSignal("opencode")
-  const [loadedIframes, setLoadedIframes] = createSignal<Set<string>>(new Set(["opencode"]))
+  const [currentView, setCurrentView] = createSignal(settings.defaultPlatform)
+  const [loadedIframes, setLoadedIframes] = createSignal<Set<string>>(new Set([settings.defaultPlatform]))
   const [settingsOpen, setSettingsOpen] = createSignal(false)
+  const [toastMessage, setToastMessage] = createSignal<string | null>(null)
 
   const [connectionState, setConnectionState] = createSignal<ConnectionState>("checking")
 
@@ -43,13 +46,48 @@ function App() {
     }
   }
 
+  function showToast(message: string) {
+    setToastMessage(message)
+    setTimeout(() => setToastMessage(null), 3000)
+  }
+
+  async function copyTextToClipboard(text: string) {
+    await navigator.clipboard.writeText(text)
+  }
+
+  async function copyImageToClipboard(dataUrl: string) {
+    const response = await fetch(dataUrl)
+    const blob = await response.blob()
+    await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })])
+  }
+
+  function handleContextMenuMessage(message: {
+    type: string
+    platformId: string
+    clipboardData: { text?: string; imageDataUrl?: string }
+  }) {
+    if (message.type !== "CONTEXT_MENU_CAPTURE") return
+
+    switchView(message.platformId)
+
+    const { text, imageDataUrl } = message.clipboardData
+    if (text) {
+      copyTextToClipboard(text).then(() => showToast("Copied! Paste with Ctrl+V"))
+    } else if (imageDataUrl) {
+      copyImageToClipboard(imageDataUrl).then(() => showToast("Screenshot copied! Paste with Ctrl+V"))
+    }
+  }
+
   onMount(() => {
+    initStorageFromLocalStorage()
     checkConnections()
     document.addEventListener("visibilitychange", handleVisibilityChange)
+    chrome.runtime.onMessage.addListener(handleContextMenuMessage)
   })
 
   onCleanup(() => {
     document.removeEventListener("visibilitychange", handleVisibilityChange)
+    chrome.runtime.onMessage.removeListener(handleContextMenuMessage)
   })
 
   function switchView(platformId: string) {
@@ -161,6 +199,10 @@ function App() {
       </main>
 
       <ContextBar />
+
+      <Show when={toastMessage()}>
+        <div class="global-toast">{toastMessage()}</div>
+      </Show>
 
       <Show when={settingsOpen()}>
         <div class="modal-overlay" onClick={() => setSettingsOpen(false)}>

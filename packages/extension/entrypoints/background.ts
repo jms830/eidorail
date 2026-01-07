@@ -1,6 +1,13 @@
 import { getCurrentWindowTabs } from "../utils/browser-context"
+import {
+  getContextMenuPlatforms,
+  onSettingsChange,
+  onPlatformsChange,
+  initStorageFromLocalStorage,
+} from "../utils/platform-storage"
 
 type ExtractionResult = { success: boolean; markdown?: string; error?: string }
+type CaptureType = "page" | "selection" | "screenshot"
 
 interface PageDimensions {
   scrollWidth: number
@@ -315,8 +322,100 @@ function extractSelectionFallback(): ExtractionResult {
   return { success: true, markdown: formatted }
 }
 
+async function createContextMenus(): Promise<void> {
+  await chrome.contextMenus.removeAll()
+
+  const platforms = await getContextMenuPlatforms()
+  if (platforms.length === 0) return
+
+  chrome.contextMenus.create({
+    id: "eidorail-parent",
+    title: "Eidorail",
+    contexts: ["page", "selection"],
+  })
+
+  for (const platform of platforms) {
+    chrome.contextMenus.create({
+      id: `send-page-${platform.id}`,
+      parentId: "eidorail-parent",
+      title: `Send Page to ${platform.name}`,
+      contexts: ["page"],
+    })
+
+    chrome.contextMenus.create({
+      id: `send-selection-${platform.id}`,
+      parentId: "eidorail-parent",
+      title: `Send Selection to ${platform.name}`,
+      contexts: ["selection"],
+    })
+  }
+
+  chrome.contextMenus.create({
+    id: "eidorail-separator",
+    parentId: "eidorail-parent",
+    type: "separator",
+    contexts: ["page", "selection"],
+  })
+
+  for (const platform of platforms) {
+    chrome.contextMenus.create({
+      id: `send-screenshot-${platform.id}`,
+      parentId: "eidorail-parent",
+      title: `Send Screenshot to ${platform.name}`,
+      contexts: ["page", "selection"],
+    })
+  }
+}
+
+function parseMenuItemId(menuItemId: string): { type: CaptureType; platformId: string } | null {
+  const match = menuItemId.match(/^send-(page|selection|screenshot)-(.+)$/)
+  if (!match) return null
+  return { type: match[1] as CaptureType, platformId: match[2] }
+}
+
+async function handleContextMenuClick(
+  info: chrome.contextMenus.OnClickData,
+  tab: chrome.tabs.Tab | undefined,
+): Promise<void> {
+  if (!tab?.id) return
+
+  const parsed = parseMenuItemId(String(info.menuItemId))
+  if (!parsed) return
+
+  const { type, platformId } = parsed
+
+  let clipboardData: { text?: string; imageDataUrl?: string } | null = null
+
+  if (type === "page") {
+    const result = await capturePageMarkdown(tab.id)
+    if (result.markdown) clipboardData = { text: result.markdown }
+  } else if (type === "selection") {
+    const result = await captureSelectionMarkdown(tab.id)
+    if (result.markdown) clipboardData = { text: result.markdown }
+  } else if (type === "screenshot") {
+    const result = await captureFullPageScreenshot(tab.id)
+    if (result.screenshot) clipboardData = { imageDataUrl: result.screenshot }
+  }
+
+  if (!clipboardData) return
+
+  await chrome.sidePanel.open({ tabId: tab.id }).catch(console.warn)
+
+  chrome.runtime.sendMessage({
+    type: "CONTEXT_MENU_CAPTURE",
+    platformId,
+    clipboardData,
+  })
+}
+
 export default defineBackground(() => {
   console.log("[Eidorail] Background service worker started")
+
+  initStorageFromLocalStorage().then(() => createContextMenus())
+  onSettingsChange(() => createContextMenus())
+  onPlatformsChange(() => createContextMenus())
+
+  chrome.contextMenus.onClicked.addListener(handleContextMenuClick)
 
   // Open sidepanel when extension icon is clicked
   chrome.action.onClicked.addListener((tab) => {

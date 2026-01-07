@@ -12,7 +12,16 @@ export default defineConfig({
       48: "icon-48.png",
       128: "icon-128.png",
     },
-    permissions: ["sidePanel", "storage", "tabs", "activeTab", "scripting", "declarativeNetRequest", "tabGroups"],
+    permissions: [
+      "sidePanel",
+      "storage",
+      "tabs",
+      "activeTab",
+      "scripting",
+      "declarativeNetRequest",
+      "tabGroups",
+      "contextMenus",
+    ],
     host_permissions: [
       "http://localhost:4096/*",
       "http://127.0.0.1:4096/*",

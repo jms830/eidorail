@@ -9,6 +9,12 @@ import {
   savePlatformsToStorage,
 } from "../utils/shared"
 import {
+  getSettingsFromLocalStorage,
+  saveSettingsToLocalStorage,
+  type EidorailSettings,
+  type ContextMenuPlatform,
+} from "../utils/platform-storage"
+import {
   checkOpenCodeStatus,
   retryConnection,
   getOpenCodeUrl,
@@ -73,6 +79,57 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const [openChamberTryCfTunnel, setOpenChamberTryCfTunnelState] = createSignal(getOpenChamberTryCfTunnel())
   const [openChamberExtraArgs, setOpenChamberExtraArgsState] = createSignal(getOpenChamberExtraArgs())
   const [openChamberStatus, setOpenChamberStatus] = createSignal<OpenCodeStatus>("checking")
+
+  const initialSettings = getSettingsFromLocalStorage()
+  const [defaultPlatform, setDefaultPlatform] = createSignal(initialSettings.defaultPlatform)
+  const [contextMenuPlatforms, setContextMenuPlatforms] = createSignal<ContextMenuPlatform[]>(
+    initialSettings.contextMenuPlatforms,
+  )
+
+  function saveEidorailSettings() {
+    const settings: EidorailSettings = {
+      defaultPlatform: defaultPlatform(),
+      contextMenuPlatforms: contextMenuPlatforms(),
+    }
+    saveSettingsToLocalStorage(settings)
+  }
+
+  function setAsDefaultPlatform(platformId: string) {
+    setDefaultPlatform(platformId)
+    saveEidorailSettings()
+    triggerToast("Default platform updated")
+  }
+
+  function toggleContextMenuPlatform(platformId: string) {
+    const updated = contextMenuPlatforms().map((c) => (c.id === platformId ? { ...c, enabled: !c.enabled } : c))
+    if (!updated.some((c) => c.id === platformId)) {
+      const maxOrder = Math.max(...updated.map((c) => c.order), -1)
+      updated.push({ id: platformId, enabled: true, order: maxOrder + 1 })
+    }
+    setContextMenuPlatforms(updated)
+    saveEidorailSettings()
+  }
+
+  function moveContextMenuPlatform(platformId: string, direction: number) {
+    const sorted = [...contextMenuPlatforms()].filter((c) => c.enabled).sort((a, b) => a.order - b.order)
+    const idx = sorted.findIndex((c) => c.id === platformId)
+    const newIdx = idx + direction
+    if (newIdx < 0 || newIdx >= sorted.length) return
+    const temp = sorted[idx].order
+    sorted[idx].order = sorted[newIdx].order
+    sorted[newIdx].order = temp
+    setContextMenuPlatforms(
+      contextMenuPlatforms().map((c) => {
+        const found = sorted.find((s) => s.id === c.id)
+        return found ? { ...c, order: found.order } : c
+      }),
+    )
+    saveEidorailSettings()
+  }
+
+  function isContextMenuEnabled(platformId: string): boolean {
+    return contextMenuPlatforms().some((c) => c.id === platformId && c.enabled)
+  }
 
   async function checkBothServices() {
     const [ocodeOk, ochamberOk] = await Promise.all([checkOpenCodeStatus(), checkOpenChamberStatus()])
@@ -429,6 +486,13 @@ export function SettingsPanel(props: SettingsPanelProps) {
                       </div>
                       <div class="platform-item-actions">
                         <button
+                          class={`platform-action-btn ${defaultPlatform() === platform.id ? "active" : ""}`}
+                          onClick={() => setAsDefaultPlatform(platform.id)}
+                          title={defaultPlatform() === platform.id ? "Default platform" : "Set as default"}
+                        >
+                          <span innerHTML={getIcon("home")} />
+                        </button>
+                        <button
                           class="platform-action-btn"
                           onClick={() => togglePlatformVisibility(platform.id)}
                           title={platform.isVisible ? "Hide" : "Show"}
@@ -485,6 +549,46 @@ export function SettingsPanel(props: SettingsPanelProps) {
                 <button class="add-custom-btn" onClick={addCustomPlatform}>
                   Add Platform
                 </button>
+              </div>
+            </div>
+
+            <div class="settings-section">
+              <h3>Right-Click Menu</h3>
+              <p class="settings-description">Select platforms to show in browser context menu</p>
+              <div class="context-menu-list">
+                <For
+                  each={platforms()
+                    .filter((p) => p.isVisible)
+                    .sort((a, b) => {
+                      const aOrder = contextMenuPlatforms().find((c) => c.id === a.id)?.order ?? 999
+                      const bOrder = contextMenuPlatforms().find((c) => c.id === b.id)?.order ?? 999
+                      return aOrder - bOrder
+                    })}
+                >
+                  {(platform) => (
+                    <div class={`context-menu-item ${isContextMenuEnabled(platform.id) ? "" : "disabled"}`}>
+                      <Show when={isContextMenuEnabled(platform.id)}>
+                        <div class="platform-reorder">
+                          <button class="reorder-btn" onClick={() => moveContextMenuPlatform(platform.id, -1)}>
+                            <span innerHTML={getIcon("chevronUp")} />
+                          </button>
+                          <button class="reorder-btn" onClick={() => moveContextMenuPlatform(platform.id, 1)}>
+                            <span innerHTML={getIcon("chevronDown")} />
+                          </button>
+                        </div>
+                      </Show>
+                      <span class="platform-item-icon" innerHTML={getIcon(platform.icon, platform.name)} />
+                      <span class="context-menu-item-name">{platform.name}</span>
+                      <button
+                        class={`platform-action-btn ${isContextMenuEnabled(platform.id) ? "active" : ""}`}
+                        onClick={() => toggleContextMenuPlatform(platform.id)}
+                        title={isContextMenuEnabled(platform.id) ? "Remove from menu" : "Add to menu"}
+                      >
+                        <span innerHTML={getIcon(isContextMenuEnabled(platform.id) ? "check" : "plus")} />
+                      </button>
+                    </div>
+                  )}
+                </For>
               </div>
             </div>
           </Show>
