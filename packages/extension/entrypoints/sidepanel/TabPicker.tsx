@@ -1,5 +1,6 @@
 import { createSignal, For, Show, onMount, onCleanup } from "solid-js"
 import type { TabInfo, GroupedTabs } from "../../utils/browser-context"
+import { sendSageMessage, MSG } from "../../utils/message-contracts"
 
 interface TabPickerProps {
   onSelect: (tab: TabInfo) => void
@@ -15,13 +16,15 @@ export function TabPicker(props: TabPickerProps) {
   let containerRef: HTMLDivElement | undefined
 
   onMount(async () => {
-    const response = await chrome.runtime.sendMessage({ type: "GET_TABS_WITH_GROUPS" })
-    if (response?.tabs) {
-      setTabs(response.tabs)
+    const res = await sendSageMessage({ type: MSG.GET_TABS_WITH_GROUPS })
+    if (res.ok) {
+      setTabs(res.data.tabs)
     }
     setLoading(false)
 
-    document.addEventListener("click", handleClickOutside)
+    setTimeout(() => {
+      document.addEventListener("click", handleClickOutside)
+    }, 0)
   })
 
   onCleanup(() => {

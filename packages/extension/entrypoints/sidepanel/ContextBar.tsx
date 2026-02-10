@@ -1,6 +1,7 @@
 import { createSignal, Show, onMount, onCleanup } from "solid-js"
 import type { TabInfo } from "../../utils/browser-context"
 import { canCaptureUrl, getAllWindowsTabs, formatTabTree } from "../../utils/browser-context"
+import { sendSageMessage, MSG } from "../../utils/message-contracts"
 import { TabPicker } from "./TabPicker"
 
 type CaptureState = "idle" | "loading" | "success" | "error"
@@ -31,13 +32,13 @@ export function ContextBar() {
   })
 
   onMount(async () => {
-    const response = await chrome.runtime.sendMessage({ type: "GET_CURRENT_TAB" })
-    if (response?.tab) {
+    const res = await sendSageMessage({ type: MSG.GET_CURRENT_TAB })
+    if (res.ok && res.data.tab?.id) {
       setTargetTab({
-        id: response.tab.id,
-        title: response.tab.title || "Untitled",
-        url: response.tab.url || "",
-        favIconUrl: response.tab.favIconUrl,
+        id: res.data.tab.id,
+        title: res.data.tab.title || "Untitled",
+        url: res.data.tab.url || "",
+        favIconUrl: res.data.tab.favIconUrl,
         active: true,
       })
     }
@@ -55,23 +56,18 @@ export function ContextBar() {
     }
 
     setScreenshotState("loading")
-    const response = await chrome.runtime.sendMessage({
-      type: "CAPTURE_FULL_PAGE_SCREENSHOT",
-      tabId: tab.id,
-    })
+    const res = await sendSageMessage({ type: MSG.CAPTURE_FULL_PAGE_SCREENSHOT, tabId: tab.id })
 
-    if (response?.error) {
+    if (!res.ok) {
       setScreenshotState("error")
-      setErrorMessage(response.error)
+      setErrorMessage(res.error)
       resetState(setScreenshotState)
       return
     }
 
-    if (response?.screenshot) {
-      await copyImageToClipboard(response.screenshot)
-      setScreenshotState("success")
-      resetState(setScreenshotState)
-    }
+    await copyImageToClipboard(res.data.screenshot)
+    setScreenshotState("success")
+    resetState(setScreenshotState)
   }
 
   async function handlePageCapture() {
@@ -82,23 +78,18 @@ export function ContextBar() {
     }
 
     setPageState("loading")
-    const response = await chrome.runtime.sendMessage({
-      type: "CAPTURE_PAGE_MARKDOWN",
-      tabId: tab.id,
-    })
+    const res = await sendSageMessage({ type: MSG.CAPTURE_PAGE_MARKDOWN, tabId: tab.id })
 
-    if (response?.error) {
+    if (!res.ok) {
       setPageState("error")
-      setErrorMessage(response.error)
+      setErrorMessage(res.error)
       resetState(setPageState)
       return
     }
 
-    if (response?.markdown) {
-      await copyToClipboard(response.markdown)
-      setPageState("success")
-      resetState(setPageState)
-    }
+    await copyToClipboard(res.data.markdown)
+    setPageState("success")
+    resetState(setPageState)
   }
 
   async function handleSelectionCapture() {
@@ -109,23 +100,18 @@ export function ContextBar() {
     }
 
     setSelectionState("loading")
-    const response = await chrome.runtime.sendMessage({
-      type: "CAPTURE_SELECTION_MARKDOWN",
-      tabId: tab.id,
-    })
+    const res = await sendSageMessage({ type: MSG.CAPTURE_SELECTION_MARKDOWN, tabId: tab.id })
 
-    if (response?.error) {
+    if (!res.ok) {
       setSelectionState("error")
-      setErrorMessage(response.error)
+      setErrorMessage(res.error)
       resetState(setSelectionState)
       return
     }
 
-    if (response?.markdown) {
-      await copyToClipboard(response.markdown)
-      setSelectionState("success")
-      resetState(setSelectionState)
-    }
+    await copyToClipboard(res.data.markdown)
+    setSelectionState("success")
+    resetState(setSelectionState)
   }
 
   async function handleTabTree() {

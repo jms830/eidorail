@@ -5,6 +5,8 @@ import {
   onPlatformsChange,
   initStorageFromLocalStorage,
 } from "../utils/platform-storage"
+import { ok, fail, errorString } from "../utils/message-contracts"
+import { sleep, withTimeout } from "../utils/async-wait"
 
 type ExtractionResult = { success: boolean; markdown?: string; error?: string }
 type CaptureType = "page" | "selection" | "screenshot"
@@ -26,7 +28,7 @@ async function captureScreenshot(tabId?: number): Promise<{ screenshot?: string;
 
       if (!tab.active) {
         await chrome.tabs.update(tabId, { active: true })
-        await new Promise((r) => setTimeout(r, 100))
+        await sleep(100)
       }
 
       const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId, { format: "png" })
@@ -52,19 +54,21 @@ async function ensureTabLoaded(tabId: number): Promise<{ ok: boolean; error?: st
   if (!tab.discarded) return { ok: true }
 
   await chrome.tabs.update(tabId, { active: true })
-  return new Promise((resolve) => {
-    const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
-      if (updatedTabId === tabId && info.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener)
-        resolve({ ok: true })
-      }
-    }
-    chrome.tabs.onUpdated.addListener(listener)
-    setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener)
-      resolve({ ok: false, error: "Tab reload timed out" })
-    }, 10000)
-  })
+  const result = await withTimeout(
+    () =>
+      new Promise<void>((resolve) => {
+        const listener = (updatedTabId: number, info: chrome.tabs.TabChangeInfo) => {
+          if (updatedTabId === tabId && info.status === "complete") {
+            chrome.tabs.onUpdated.removeListener(listener)
+            resolve()
+          }
+        }
+        chrome.tabs.onUpdated.addListener(listener)
+      }),
+    10000,
+    "tab reload",
+  )
+  return result.ok ? { ok: true } : { ok: false, error: result.error }
 }
 
 async function capturePageMarkdown(tabId: number): Promise<{ markdown?: string; error?: string }> {
@@ -77,7 +81,7 @@ async function capturePageMarkdown(tabId: number): Promise<{ markdown?: string; 
       return { markdown: result.markdown }
     }
   } catch {
-    console.log("[Eidorail] Content script not available, using fallback extraction")
+    console.log("[Sage] Content script not available, using fallback extraction")
   }
 
   try {
@@ -108,7 +112,7 @@ async function captureSelectionMarkdown(tabId: number): Promise<{ markdown?: str
       return { error: result.error }
     }
   } catch {
-    console.log("[Eidorail] Content script not available, using fallback extraction")
+    console.log("[Sage] Content script not available, using fallback extraction")
   }
 
   try {
@@ -162,7 +166,7 @@ async function captureFullPageScreenshot(tabId: number): Promise<{ screenshot?: 
     const tab = await chrome.tabs.get(tabId)
     if (!tab.active) {
       await chrome.tabs.update(tabId, { active: true })
-      await new Promise((r) => setTimeout(r, 150))
+      await sleep(150)
     }
 
     const dimResults = await chrome.scripting.executeScript({
@@ -204,12 +208,12 @@ async function captureFullPageScreenshot(tabId: number): Promise<{ screenshot?: 
           args: [scrollX, scrollY],
         })
 
-        await new Promise((r) => setTimeout(r, 150))
+        await sleep(150)
 
         const dataUrl = await chrome.tabs.captureVisibleTab(tab.windowId!, { format: "png" })
         tiles.push({ dataUrl, x: scrollX, y: scrollY })
 
-        await new Promise((r) => setTimeout(r, 400))
+        await sleep(400)
       }
     }
 
@@ -329,30 +333,30 @@ async function createContextMenus(): Promise<void> {
   if (platforms.length === 0) return
 
   chrome.contextMenus.create({
-    id: "eidorail-parent",
-    title: "Eidorail",
+    id: "sage-parent",
+    title: "Sage Sidebar",
     contexts: ["page", "selection"],
   })
 
   for (const platform of platforms) {
     chrome.contextMenus.create({
       id: `send-page-${platform.id}`,
-      parentId: "eidorail-parent",
+      parentId: "sage-parent",
       title: `Send Page to ${platform.name}`,
       contexts: ["page"],
     })
 
     chrome.contextMenus.create({
       id: `send-selection-${platform.id}`,
-      parentId: "eidorail-parent",
+      parentId: "sage-parent",
       title: `Send Selection to ${platform.name}`,
       contexts: ["selection"],
     })
   }
 
   chrome.contextMenus.create({
-    id: "eidorail-separator",
-    parentId: "eidorail-parent",
+    id: "sage-separator",
+    parentId: "sage-parent",
     type: "separator",
     contexts: ["page", "selection"],
   })
@@ -360,7 +364,7 @@ async function createContextMenus(): Promise<void> {
   for (const platform of platforms) {
     chrome.contextMenus.create({
       id: `send-screenshot-${platform.id}`,
-      parentId: "eidorail-parent",
+      parentId: "sage-parent",
       title: `Send Screenshot to ${platform.name}`,
       contexts: ["page", "selection"],
     })
@@ -408,8 +412,22 @@ async function handleContextMenuClick(
   })
 }
 
+// Platforms that need manual content script injection in sidepanel iframes
+const COMPACT_MODE_URLS = [
+  { pattern: /^https:\/\/app\.ninjacat\.io\//, script: "content-scripts/ninjacat-compact.js" },
+  { pattern: /^https:\/\/app\.mymarketingreports\.com\//, script: "content-scripts/ninjacat-compact.js" },
+]
+
+function shouldInjectCompactMode(url: string): string | null {
+  if (!url.includes("sage=compact")) return null
+  for (const { pattern, script } of COMPACT_MODE_URLS) {
+    if (pattern.test(url)) return script
+  }
+  return null
+}
+
 export default defineBackground(() => {
-  console.log("[Eidorail] Background service worker started")
+  console.log("[Sage] Background service worker started")
 
   initStorageFromLocalStorage().then(() => createContextMenus())
   onSettingsChange(() => createContextMenus())
@@ -417,11 +435,30 @@ export default defineBackground(() => {
 
   chrome.contextMenus.onClicked.addListener(handleContextMenuClick)
 
+  // Inject compact mode scripts into iframes within sidepanel
+  // Content scripts don't auto-inject into iframes in extension pages
+  chrome.webNavigation.onDOMContentLoaded.addListener((details) => {
+    const script = shouldInjectCompactMode(details.url)
+    if (!script) return
+
+    console.log("[Sage] Injecting compact mode into:", details.url, "frame:", details.frameId)
+
+    chrome.scripting
+      .executeScript({
+        target: { tabId: details.tabId, frameIds: [details.frameId] },
+        files: [script],
+      })
+      .catch((error) => {
+        // This is expected to fail for regular tabs where content script already injected
+        console.log("[Sage] Script injection skipped (likely already injected):", error.message)
+      })
+  })
+
   // Open sidepanel when extension icon is clicked
   chrome.action.onClicked.addListener((tab) => {
     if (!tab.id) return
     chrome.sidePanel.open({ tabId: tab.id }).catch((error) => {
-      console.warn("[Eidorail] Failed to open sidepanel:", error)
+      console.warn("[Sage] Failed to open sidepanel:", error)
     })
   })
 
@@ -436,45 +473,49 @@ export default defineBackground(() => {
         return chrome.sidePanel.open({ tabId: tab.id })
       })
       .catch((error) => {
-        console.warn("[Eidorail] Failed to toggle sidepanel:", error)
+        console.warn("[Sage] Failed to toggle sidepanel:", error)
       })
   })
 
   // Set sidepanel behavior to open on action click
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
-    console.warn("[Eidorail] Failed to set sidepanel behavior:", error)
+    console.warn("[Sage] Failed to set sidepanel behavior:", error)
   })
 
   // Listen for messages from sidepanel or content scripts
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    console.log("[Eidorail] Received message:", message.type)
+    console.log("[Sage] Received message:", message.type)
 
     switch (message.type) {
       case "GET_CURRENT_TAB":
         chrome.tabs
           .query({ active: true, currentWindow: true })
-          .then(([tab]) => {
-            sendResponse({ tab })
-          })
-          .catch((error) => {
-            sendResponse({ error: error instanceof Error ? error.message : String(error) })
-          })
-        return true // Will respond asynchronously
+          .then(([tab]) => sendResponse(ok({ tab })))
+          .catch((err) => sendResponse(fail(errorString(err))))
+        return true
 
       case "CAPTURE_SCREENSHOT":
         captureScreenshot(message.tabId)
-          .then((result) => sendResponse(result))
-          .catch((error) => sendResponse({ error: error.message }))
+          .then((r) =>
+            r.screenshot
+              ? sendResponse(ok({ screenshot: r.screenshot }))
+              : sendResponse(fail(r.error || "Screenshot capture failed")),
+          )
+          .catch((err) => sendResponse(fail(errorString(err))))
         return true
 
       case "CAPTURE_FULL_PAGE_SCREENSHOT":
         if (message.tabId) {
           captureFullPageScreenshot(message.tabId)
-            .then((result) => sendResponse(result))
-            .catch((error) => sendResponse({ error: error.message }))
+            .then((r) =>
+              r.screenshot
+                ? sendResponse(ok({ screenshot: r.screenshot }))
+                : sendResponse(fail(r.error || "Full page capture failed")),
+            )
+            .catch((err) => sendResponse(fail(errorString(err))))
           return true
         }
-        sendResponse({ error: "No tabId provided" })
+        sendResponse(fail("No tabId provided"))
         return true
 
       case "GET_PAGE_CONTENT":
@@ -482,7 +523,7 @@ export default defineBackground(() => {
           ensureTabLoaded(message.tabId)
             .then((loaded) => {
               if (!loaded.ok) {
-                sendResponse({ error: loaded.error })
+                sendResponse(fail(loaded.error || "Tab load failed"))
                 return
               }
               return chrome.scripting.executeScript({
@@ -491,67 +532,67 @@ export default defineBackground(() => {
               })
             })
             .then((results) => {
-              if (results) sendResponse({ content: results[0]?.result || "" })
+              if (results) sendResponse(ok({ content: results[0]?.result || "" }))
             })
-            .catch((error) => {
-              sendResponse({ error: error.message })
-            })
+            .catch((err) => sendResponse(fail(errorString(err))))
           return true
         }
         break
 
       case "GET_TABS_WITH_GROUPS":
         getCurrentWindowTabs()
-          .then((tabs) => {
-            sendResponse({ tabs })
-          })
-          .catch((error) => {
-            sendResponse({ error: error.message })
-          })
+          .then((tabs) => sendResponse(ok({ tabs })))
+          .catch((err) => sendResponse(fail(errorString(err))))
         return true
 
       case "CAPTURE_PAGE_MARKDOWN":
         if (message.tabId) {
           capturePageMarkdown(message.tabId)
-            .then((result) => sendResponse(result))
-            .catch((error) => sendResponse({ error: error.message }))
+            .then((r) =>
+              r.markdown
+                ? sendResponse(ok({ markdown: r.markdown }))
+                : sendResponse(fail(r.error || "Markdown extraction failed")),
+            )
+            .catch((err) => sendResponse(fail(errorString(err))))
           return true
         }
-        sendResponse({ error: "No tabId provided" })
+        sendResponse(fail("No tabId provided"))
         return true
 
       case "CAPTURE_SELECTION_MARKDOWN":
         if (message.tabId) {
           captureSelectionMarkdown(message.tabId)
-            .then((result) => sendResponse(result))
-            .catch((error) => sendResponse({ error: error.message }))
+            .then((r) =>
+              r.markdown
+                ? sendResponse(ok({ markdown: r.markdown }))
+                : sendResponse(fail(r.error || "Selection extraction failed")),
+            )
+            .catch((err) => sendResponse(fail(errorString(err))))
           return true
         }
-        sendResponse({ error: "No tabId provided" })
+        sendResponse(fail("No tabId provided"))
         return true
 
       default:
-        console.log("[Eidorail] Unknown message type:", message.type)
+        console.log("[Sage] Unknown message type:", message.type)
     }
   })
 
   // Listen for external messages from Eidolon Sync extension
   chrome.runtime.onMessageExternal.addListener((message, sender, sendResponse) => {
-    console.log("[Eidorail] External message from:", sender.id, message.type)
+    console.log("[Sage] External message from:", sender.id, message.type)
 
     switch (message.type) {
       case "IMPORT_PROJECT":
-        // Handle project import from Eidolon Sync
-        // This will open the project in OpenCode
-        sendResponse({ success: true })
+        sendResponse(ok({ success: true as const }))
         break
 
       case "PING":
-        sendResponse({ pong: true, version: "0.1.0" })
+        sendResponse(ok({ pong: true as const, version: "0.1.0" }))
         break
 
       default:
-        sendResponse({ error: "Unknown message type" })
+        sendResponse(fail("Unknown message type"))
     }
   })
 })
