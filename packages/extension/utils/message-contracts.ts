@@ -5,6 +5,7 @@
  */
 
 import type { GroupedTabs } from "../utils/browser-context"
+import type { PageDiagnostics } from "../utils/page-diagnostics"
 
 export const MSG = {
   GET_CURRENT_TAB: "GET_CURRENT_TAB",
@@ -14,6 +15,8 @@ export const MSG = {
   GET_TABS_WITH_GROUPS: "GET_TABS_WITH_GROUPS",
   CAPTURE_PAGE_MARKDOWN: "CAPTURE_PAGE_MARKDOWN",
   CAPTURE_SELECTION_MARKDOWN: "CAPTURE_SELECTION_MARKDOWN",
+  CAPTURE_DIAGNOSTICS: "CAPTURE_DIAGNOSTICS",
+  CAPTURE_PAGE_SNAPSHOT: "CAPTURE_PAGE_SNAPSHOT",
   IMPORT_PROJECT: "IMPORT_PROJECT",
   PING: "PING",
   CONTEXT_MENU_CAPTURE: "CONTEXT_MENU_CAPTURE",
@@ -54,6 +57,17 @@ interface CaptureSelectionMarkdownRequest {
   tabId: number
 }
 
+interface CaptureDiagnosticsRequest {
+  type: typeof MSG.CAPTURE_DIAGNOSTICS
+  tabId: number
+  install?: boolean
+}
+
+interface CapturePageSnapshotRequest {
+  type: typeof MSG.CAPTURE_PAGE_SNAPSHOT
+  tabId: number
+}
+
 interface ImportProjectRequest {
   type: typeof MSG.IMPORT_PROJECT
 }
@@ -70,6 +84,8 @@ export type SageRequest =
   | GetTabsWithGroupsRequest
   | CapturePageMarkdownRequest
   | CaptureSelectionMarkdownRequest
+  | CaptureDiagnosticsRequest
+  | CapturePageSnapshotRequest
   | ImportProjectRequest
   | PingRequest
 
@@ -97,6 +113,27 @@ interface ImportPayload {
   success: true
 }
 
+interface DiagnosticsPayload {
+  diagnostics: PageDiagnostics
+  markdown: string
+}
+
+export interface PageSnapshot {
+  url: string
+  title: string
+  capturedAt: number
+  headings: Array<{ level: number; text: string }>
+  links: number
+  images: number
+  forms: Array<{ action: string; fields: string[] }>
+  wordCount: number
+  lang: string
+}
+
+interface SnapshotPayload {
+  snapshot: PageSnapshot
+}
+
 interface PongPayload {
   pong: true
   version: string
@@ -110,6 +147,8 @@ export interface ResponseMap {
   [MSG.GET_TABS_WITH_GROUPS]: TabsPayload
   [MSG.CAPTURE_PAGE_MARKDOWN]: MarkdownPayload
   [MSG.CAPTURE_SELECTION_MARKDOWN]: MarkdownPayload
+  [MSG.CAPTURE_DIAGNOSTICS]: DiagnosticsPayload
+  [MSG.CAPTURE_PAGE_SNAPSHOT]: SnapshotPayload
   [MSG.IMPORT_PROJECT]: ImportPayload
   [MSG.PING]: PongPayload
 }

@@ -6,6 +6,12 @@ import {
   initStorageFromLocalStorage,
 } from "../utils/platform-storage"
 import { ok, fail, errorString } from "../utils/message-contracts"
+import type { PageSnapshot } from "../utils/message-contracts"
+import {
+  installDiagnosticsCollectorScript,
+  harvestDiagnosticsScript,
+  formatDiagnostics,
+} from "../utils/page-diagnostics"
 import { sleep, withTimeout } from "../utils/async-wait"
 
 type ExtractionResult = { success: boolean; markdown?: string; error?: string }
@@ -147,6 +153,41 @@ function getPageDimensionsScript(): PageDimensions {
     devicePixelRatio: window.devicePixelRatio || 1,
     originalScrollX: window.scrollX,
     originalScrollY: window.scrollY,
+  }
+}
+
+function collectPageSnapshotScript(): PageSnapshot {
+  const headings: PageSnapshot["headings"] = []
+  document.querySelectorAll("h1,h2,h3,h4,h5,h6").forEach((h) => {
+    headings.push({ level: parseInt(h.tagName[1], 10), text: (h.textContent || "").trim().slice(0, 200) })
+  })
+
+  const links = document.querySelectorAll("a[href]").length
+  const images = document.querySelectorAll("img").length
+
+  const forms: PageSnapshot["forms"] = []
+  document.querySelectorAll("form").forEach((form) => {
+    const fields: string[] = []
+    form.querySelectorAll("input,select,textarea").forEach((el) => {
+      const name = el.getAttribute("name") || el.getAttribute("id") || el.getAttribute("type") || "unknown"
+      fields.push(name)
+    })
+    forms.push({ action: form.action || "", fields })
+  })
+
+  const text = document.body.innerText || ""
+  const wordCount = text.split(/\s+/).filter((w) => w.length > 0).length
+
+  return {
+    url: window.location.href,
+    title: document.title,
+    capturedAt: Date.now(),
+    headings,
+    links,
+    images,
+    forms,
+    wordCount,
+    lang: document.documentElement.lang || "",
   }
 }
 
@@ -567,6 +608,77 @@ export default defineBackground(() => {
                 ? sendResponse(ok({ markdown: r.markdown }))
                 : sendResponse(fail(r.error || "Selection extraction failed")),
             )
+            .catch((err) => sendResponse(fail(errorString(err))))
+          return true
+        }
+        sendResponse(fail("No tabId provided"))
+        return true
+
+      case "CAPTURE_DIAGNOSTICS":
+        if (message.tabId) {
+          const diagTabId = message.tabId as number
+          ensureTabLoaded(diagTabId)
+            .then(async (loaded) => {
+              if (!loaded.ok) {
+                sendResponse(fail(loaded.error || "Tab load failed"))
+                return
+              }
+              if (message.install) {
+                await chrome.scripting.executeScript({
+                  target: { tabId: diagTabId },
+                  func: installDiagnosticsCollectorScript,
+                  world: "MAIN",
+                })
+              }
+              const results = await chrome.scripting.executeScript({
+                target: { tabId: diagTabId },
+                func: harvestDiagnosticsScript,
+                world: "MAIN",
+              })
+              const diag = results[0]?.result
+              if (!diag) {
+                sendResponse(fail("Failed to collect diagnostics"))
+                return
+              }
+              sendResponse(ok({ diagnostics: diag, markdown: formatDiagnostics(diag) }))
+            })
+            .catch((err) => sendResponse(fail(errorString(err))))
+          return true
+        }
+        sendResponse(fail("No tabId provided"))
+        return true
+
+      case "CAPTURE_PAGE_SNAPSHOT":
+        if (message.tabId) {
+          const snapTabId = message.tabId as number
+          ensureTabLoaded(snapTabId)
+            .then(async (loaded) => {
+              if (!loaded.ok) {
+                sendResponse(fail(loaded.error || "Tab load failed"))
+                return
+              }
+              // Try content script first (richer extraction when available)
+              try {
+                const csResult = await chrome.tabs.sendMessage(snapTabId, { type: "EXTRACT_PAGE_SNAPSHOT" })
+                if (csResult?.success && csResult.snapshot) {
+                  sendResponse(ok({ snapshot: csResult.snapshot }))
+                  return
+                }
+              } catch {
+                console.log("[Sage] Content script not available for snapshot, using fallback")
+              }
+              // Fallback: inject script directly
+              const results = await chrome.scripting.executeScript({
+                target: { tabId: snapTabId },
+                func: collectPageSnapshotScript,
+              })
+              const snapshot = results[0]?.result
+              if (!snapshot) {
+                sendResponse(fail("Failed to collect page snapshot"))
+                return
+              }
+              sendResponse(ok({ snapshot }))
+            })
             .catch((err) => sendResponse(fail(errorString(err))))
           return true
         }
