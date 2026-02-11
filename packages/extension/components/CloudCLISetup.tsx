@@ -1,10 +1,10 @@
-import { createSignal, Show, onMount } from "solid-js"
+import { createSignal, Show, For, onMount } from "solid-js"
 import { getIcon } from "../utils/shared"
 import {
   checkCloudCLIStatus,
   retryCloudCLIConnection,
   getCloudCLIStartCommand,
-  getClaudeCodeInstallCommand,
+  getClaudeCodeInstallCommands,
   getCloudCLIPort,
 } from "../utils/cloudcli-status"
 
@@ -60,7 +60,7 @@ export function CloudCLISetup(props: CloudCLISetupProps) {
     })
   })
 
-  const installCommand = getClaudeCodeInstallCommand()
+  const installCommands = getClaudeCodeInstallCommands()
   const startCommand = getCloudCLIStartCommand()
   const port = getCloudCLIPort()
 
@@ -85,20 +85,27 @@ export function CloudCLISetup(props: CloudCLISetupProps) {
           </div>
         </div>
         <div class="wizard-step-content">
-          <div class="copy-command-box">
-            <code>{installCommand}</code>
-            <button
-              type="button"
-              class="copy-command-btn"
-              onClick={() => {
-                navigator.clipboard.writeText(installCommand)
-                triggerToast("Copied to clipboard!")
-              }}
-            >
-              <span innerHTML={getIcon("copy")} />
-              Copy
-            </button>
-          </div>
+          <For each={installCommands}>
+            {(cmd) => (
+              <div class="copy-command-box">
+                <Show when={installCommands.length > 1}>
+                  <span class="command-label">{cmd.label}</span>
+                </Show>
+                <code>{cmd.command}</code>
+                <button
+                  type="button"
+                  class="copy-command-btn"
+                  onClick={() => {
+                    navigator.clipboard.writeText(cmd.command)
+                    triggerToast("Copied to clipboard!")
+                  }}
+                >
+                  <span innerHTML={getIcon("copy")} />
+                  Copy
+                </button>
+              </div>
+            )}
+          </For>
           <p class="wizard-hint">
             <span class="hint-icon">💡</span>
             Already have <code>claude</code> command? Skip to Step 2
@@ -206,10 +213,11 @@ export function CloudCLISetup(props: CloudCLISetupProps) {
               <strong>Port conflict?</strong> Change port in Settings → Connection
             </li>
             <li>
-              <strong>Need to install Node.js?</strong>{" "}
+              <strong>Need Node.js for Step 2?</strong>{" "}
               <a href="https://nodejs.org" target="_blank" rel="noopener noreferrer">
                 Download Node.js
-              </a>
+              </a>{" "}
+              (required for <code>npx</code>)
             </li>
             <li>
               <strong>Claude Code not working?</strong> Make sure you're logged in: <code>claude login</code>
