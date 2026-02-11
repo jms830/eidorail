@@ -469,6 +469,13 @@ function shouldInjectCompactMode(url: string): string | null {
 
 export default defineBackground(() => {
   console.log("[Sage] Background service worker started")
+  console.log("[Sage] Available APIs:", {
+    sidePanel: !!chrome.sidePanel,
+    action: !!chrome.action,
+    tabGroups: !!chrome.tabGroups,
+    contextMenus: !!chrome.contextMenus,
+    webNavigation: !!chrome.webNavigation,
+  })
 
   initStorageFromLocalStorage().then(() => createContextMenus())
   onSettingsChange(() => createContextMenus())
@@ -495,32 +502,46 @@ export default defineBackground(() => {
       })
   })
 
-  // Open sidepanel when extension icon is clicked
+  // Let the browser itself open the sidepanel when the toolbar icon is clicked.
+  // This is required for Vivaldi, which never fires action.onClicked.
+  chrome.sidePanel
+    .setPanelBehavior({ openPanelOnActionClick: true })
+    .then(() => {
+      console.log("[Sage] setPanelBehavior(openPanelOnActionClick: true) succeeded")
+    })
+    .catch((error) => {
+      console.warn("[Sage] setPanelBehavior failed:", error)
+    })
+
+  // Fallback for browsers where setPanelBehavior doesn't work.
+  // In Chrome, setPanelBehavior suppresses this event — that's fine, Chrome uses setPanelBehavior.
+  // In browsers where setPanelBehavior is broken, this catches the click.
   chrome.action.onClicked.addListener((tab) => {
-    if (!tab.id) return
-    chrome.sidePanel.open({ tabId: tab.id }).catch((error) => {
-      console.warn("[Sage] Failed to open sidepanel:", error)
+    console.warn("[Sage] action.onClicked fired (setPanelBehavior may not be active)")
+    if (!tab.windowId) return
+    chrome.sidePanel.open({ windowId: tab.windowId }).catch((error) => {
+      console.warn("[Sage] sidePanel.open(windowId) failed:", error)
+      if (tab.id) {
+        chrome.sidePanel.open({ tabId: tab.id }).catch(() => {})
+      }
     })
   })
 
-  // Handle keyboard commands
+  // Handle keyboard commands (Ctrl+E / Cmd+E)
+  // Also serves as fallback for Vivaldi where action.onClicked may not fire
   chrome.commands.onCommand.addListener((command) => {
+    console.warn("[Sage] command fired:", command)
     if (command !== "toggle-side-panel") return
 
-    chrome.tabs
-      .query({ active: true, currentWindow: true })
-      .then(([tab]) => {
-        if (!tab?.id) return
-        return chrome.sidePanel.open({ tabId: tab.id })
+    chrome.windows
+      .getCurrent()
+      .then((win) => {
+        if (!win.id) return
+        return chrome.sidePanel.open({ windowId: win.id })
       })
       .catch((error) => {
-        console.warn("[Sage] Failed to toggle sidepanel:", error)
+        console.warn("[Sage] Failed to toggle sidepanel via command:", error)
       })
-  })
-
-  // Set sidepanel behavior to open on action click
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch((error) => {
-    console.warn("[Sage] Failed to set sidepanel behavior:", error)
   })
 
   // Listen for messages from sidepanel or content scripts

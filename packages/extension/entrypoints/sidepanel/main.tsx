@@ -3,14 +3,22 @@ import { createSignal, For, Show, onMount, onCleanup, ErrorBoundary } from "soli
 import "./style.css"
 import { checkOpenCodeStatus } from "../../utils/opencode-status"
 import { checkOpenChamberStatus, getOpenChamberUrl } from "../../utils/openchamber-status"
+import { checkCloudCLIStatus, getCloudCLIUrl } from "../../utils/cloudcli-status"
 import { launchOpenCodeInTerminal } from "../../utils/terminal-launcher"
 import { type Platform, getIcon, loadPlatforms } from "../../utils/shared"
 import { SettingsPanel } from "../../components/SettingsPanel"
+import { SetupWizard } from "../../components/SetupWizard"
 import { ContextBar } from "./ContextBar"
 import { getOpenCodePort } from "../../utils/opencode-status"
-import { getSettingsFromLocalStorage, initStorageFromLocalStorage } from "../../utils/platform-storage"
+import {
+  getSettingsFromLocalStorage,
+  saveSettingsToLocalStorage,
+  initStorageFromLocalStorage,
+  type CodeBackend,
+} from "../../utils/platform-storage"
+import { shouldShowSetupWizard, detectCodeBackend, getActiveBackend } from "../../utils/backend-detection"
 
-type ConnectionState = "checking" | "opencode-missing" | "openchamber-missing" | "connected"
+type ConnectionState = "checking" | "opencode-missing" | "openchamber-missing" | "cloudcli-missing" | "connected"
 
 function App() {
   const settings = getSettingsFromLocalStorage()
@@ -21,10 +29,26 @@ function App() {
   const [toastMessage, setToastMessage] = createSignal<string | null>(null)
 
   const [connectionState, setConnectionState] = createSignal<ConnectionState>("checking")
+  const [showWizard, setShowWizard] = createSignal(shouldShowSetupWizard())
+  const [activeBackend, setActiveBackend] = createSignal<CodeBackend>(getActiveBackend())
 
   async function checkConnections(silent = false) {
     if (!silent) setConnectionState("checking")
 
+    const backend = activeBackend()
+
+    // CloudCLI backend: check only CloudCLI
+    if (backend === "cloudcli") {
+      const cloudcliOk = await checkCloudCLIStatus()
+      if (!cloudcliOk) {
+        setConnectionState("cloudcli-missing")
+        return
+      }
+      setConnectionState("connected")
+      return
+    }
+
+    // OpenChamber backend (or none): check OpenCode + OpenChamber
     const openCodeOk = await checkOpenCodeStatus()
     if (!openCodeOk) {
       setConnectionState("opencode-missing")
@@ -78,9 +102,41 @@ function App() {
     }
   }
 
+  function handleWizardComplete(backend: CodeBackend) {
+    // Update local state
+    setActiveBackend(backend)
+    setShowWizard(false)
+
+    // Save to storage
+    saveSettingsToLocalStorage({
+      ...getSettingsFromLocalStorage(),
+      codeBackend: backend,
+      codeBackendSetupComplete: true,
+      showSetupWizardOnStart: false,
+    })
+
+    // If "Chat Only" selected, switch to Claude.ai tab
+    if (backend === "none") {
+      setCurrentView("claude")
+      // Make sure Claude tab is loaded
+      if (!loadedIframes().has("claude")) {
+        setLoadedIframes((prev) => new Set([...prev, "claude"]))
+      }
+      return
+    }
+
+    // Check connections for the selected backend
+    checkConnections()
+  }
+
   onMount(() => {
     initStorageFromLocalStorage()
-    checkConnections()
+
+    // If showing wizard, don't check connections yet (wizard will handle it)
+    if (!showWizard()) {
+      checkConnections()
+    }
+
     document.addEventListener("visibilitychange", handleVisibilityChange)
     chrome.runtime.onMessage.addListener(handleContextMenuMessage)
   })
@@ -100,9 +156,17 @@ function App() {
     }
   }
 
+  function getCodeBackendUrl(): string {
+    const backend = activeBackend()
+    if (backend === "cloudcli") {
+      return getCloudCLIUrl()
+    }
+    return getOpenChamberUrl()
+  }
+
   function openExternal() {
     const platform = platforms().find((p) => p.id === currentView())
-    const url = platform?.id === "opencode" ? getOpenChamberUrl() : platform?.url
+    const url = platform?.id === "opencode" ? getCodeBackendUrl() : platform?.url
     if (!url) return
 
     if (typeof chrome !== "undefined" && chrome.tabs) {
@@ -124,96 +188,129 @@ function App() {
   }
 
   return (
-    <div class="eidorail-container">
-      <header class="platform-bar">
-        <div class="platform-tabs">
-          <For
-            each={platforms()
-              .filter((p) => p.isVisible)
-              .sort((a, b) => a.order - b.order)}
-          >
-            {(platform) => (
-              <button
-                class={`platform-tab ${currentView() === platform.id ? "active" : ""}`}
-                onClick={() => switchView(platform.id)}
-                title={platform.name}
-              >
-                <span class="platform-icon" innerHTML={getIcon(platform.icon, platform.name)} />
-              </button>
-            )}
-          </For>
-          <button class="platform-tab add-btn" title="Add Platform" onClick={() => setSettingsOpen(true)}>
-            <span class="platform-icon" innerHTML={getIcon("plus")} />
-          </button>
+    <Show
+      when={!showWizard()}
+      fallback={
+        <div class="sage-container wizard-mode">
+          <SetupWizard onComplete={handleWizardComplete} />
         </div>
-        <div class="platform-actions">
-          <button class="action-btn" onClick={openExternal} title="Open in new tab">
-            <span class="action-icon" innerHTML={getIcon("external")} />
-          </button>
-          <button
-            class="action-btn"
-            onClick={() => launchOpenCodeInTerminal(getOpenCodePort())}
-            title="Launch Terminal"
-          >
-            <span class="action-icon" innerHTML={getIcon("terminal")} />
-          </button>
-          <button class="action-btn" onClick={() => setSettingsOpen(true)} title="Settings">
-            <span class="action-icon" innerHTML={getIcon("settings")} />
-          </button>
-        </div>
-      </header>
+      }
+    >
+      <div class="sage-container">
+        <header class="platform-bar">
+          <div class="platform-tabs">
+            <For
+              each={platforms()
+                .filter((p) => p.isVisible)
+                .sort((a, b) => a.order - b.order)}
+            >
+              {(platform) => (
+                <button
+                  type="button"
+                  class={`platform-tab ${currentView() === platform.id ? "active" : ""}`}
+                  onClick={() => switchView(platform.id)}
+                  title={platform.name}
+                >
+                  <span class="platform-icon" innerHTML={getIcon(platform.icon, platform.name)} />
+                </button>
+              )}
+            </For>
+            <button
+              type="button"
+              class="platform-tab add-btn"
+              title="Add Platform"
+              onClick={() => setSettingsOpen(true)}
+            >
+              <span class="platform-icon" innerHTML={getIcon("plus")} />
+            </button>
+          </div>
+          <div class="platform-actions">
+            <button type="button" class="action-btn" onClick={openExternal} title="Open in new tab">
+              <span class="action-icon" innerHTML={getIcon("external")} />
+            </button>
+            <button
+              type="button"
+              class="action-btn"
+              onClick={() => launchOpenCodeInTerminal(getOpenCodePort())}
+              title="Launch Terminal"
+            >
+              <span class="action-icon" innerHTML={getIcon("terminal")} />
+            </button>
+            <button type="button" class="action-btn" onClick={() => setSettingsOpen(true)} title="Settings">
+              <span class="action-icon" innerHTML={getIcon("settings")} />
+            </button>
+          </div>
+        </header>
 
-      <main class="view-container">
-        <For each={platforms().filter((p) => p.isVisible)}>
-          {(platform) => (
-            <div class={`view-panel ${currentView() === platform.id ? "active" : ""}`} data-view={platform.id}>
-              <Show when={platform.id === "opencode"}>
-                <Show when={connectionState() === "checking"}>
-                  <div class="checking-status">
-                    <div class="spinner" />
-                    <p>Connecting...</p>
-                  </div>
+        <main class="view-container">
+          <For each={platforms().filter((p) => p.isVisible)}>
+            {(platform) => (
+              <div class={`view-panel ${currentView() === platform.id ? "active" : ""}`} data-view={platform.id}>
+                <Show when={platform.id === "opencode"}>
+                  <Show when={connectionState() === "checking"}>
+                    <div class="checking-status">
+                      <div class="spinner" />
+                      <p>Connecting...</p>
+                    </div>
+                  </Show>
+                  <Show when={connectionState() === "connected"}>
+                    <iframe
+                      src={getCodeBackendUrl()}
+                      class="platform-frame openchamber-frame"
+                      title={activeBackend() === "cloudcli" ? "CloudCLI" : "OpenChamber"}
+                      allow="clipboard-read; clipboard-write"
+                    />
+                  </Show>
+                  <Show when={connectionState() === "cloudcli-missing"}>
+                    <SettingsPanel
+                      inlineMode={true}
+                      onConnectionReady={() => checkConnections()}
+                      onPlatformsChange={handlePlatformsChange}
+                    />
+                  </Show>
+                  <Show when={connectionState() === "opencode-missing" || connectionState() === "openchamber-missing"}>
+                    <SettingsPanel
+                      inlineMode={true}
+                      onConnectionReady={() => checkConnections()}
+                      onPlatformsChange={handlePlatformsChange}
+                    />
+                  </Show>
                 </Show>
-                <Show when={connectionState() === "connected"}>
+
+                <Show when={platform.id !== "opencode" && loadedIframes().has(platform.id)}>
                   <iframe
-                    src={getOpenChamberUrl()}
-                    class="platform-frame openchamber-frame"
+                    src={platform.url}
+                    class="platform-frame"
+                    title={platform.name}
                     allow="clipboard-read; clipboard-write"
                   />
                 </Show>
-                <Show when={connectionState() === "opencode-missing" || connectionState() === "openchamber-missing"}>
-                  <SettingsPanel
-                    inlineMode={true}
-                    onConnectionReady={() => checkConnections()}
-                    onPlatformsChange={handlePlatformsChange}
-                  />
-                </Show>
-              </Show>
+              </div>
+            )}
+          </For>
+        </main>
 
-              <Show when={platform.id !== "opencode" && loadedIframes().has(platform.id)}>
-                <iframe src={platform.url} class="platform-frame" allow="clipboard-read; clipboard-write" />
-              </Show>
-            </div>
-          )}
-        </For>
-      </main>
+        <ContextBar />
 
-      <ContextBar />
+        <Show when={toastMessage()}>
+          <div class="global-toast">{toastMessage()}</div>
+        </Show>
 
-      <Show when={toastMessage()}>
-        <div class="global-toast">{toastMessage()}</div>
-      </Show>
-
-      <Show when={settingsOpen()}>
-        <div class="modal-overlay" onClick={() => setSettingsOpen(false)}>
-          <SettingsPanel
-            isModal={true}
-            onClose={() => setSettingsOpen(false)}
-            onPlatformsChange={handlePlatformsChange}
-          />
-        </div>
-      </Show>
-    </div>
+        <Show when={settingsOpen()}>
+          <div
+            class="modal-overlay"
+            onClick={() => setSettingsOpen(false)}
+            onKeyDown={(e) => e.key === "Escape" && setSettingsOpen(false)}
+          >
+            <SettingsPanel
+              isModal={true}
+              onClose={() => setSettingsOpen(false)}
+              onPlatformsChange={handlePlatformsChange}
+            />
+          </div>
+        </Show>
+      </div>
+    </Show>
   )
 }
 
@@ -225,7 +322,7 @@ if (root) {
         fallback={(error, reset) => (
           <div class="checking-status">
             <p>Something went wrong.</p>
-            <button class="action-btn" onClick={reset}>
+            <button type="button" class="action-btn" onClick={reset}>
               Retry
             </button>
             <pre>{String(error)}</pre>

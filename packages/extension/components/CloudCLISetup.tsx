@@ -201,6 +201,27 @@ export function CloudCLISetup(props: CloudCLISetupProps) {
         </Show>
       </div>
 
+      {/* Browser Automation Tip */}
+      <details class="setup-tips">
+        <summary>
+          <span innerHTML={getIcon("info")} />
+          Enable Browser Automation
+        </summary>
+        <div class="tips-content">
+          <p>
+            Give Claude Code access to your browser for live debugging, testing, and automation. Install the{" "}
+            <a
+              href="https://chromewebstore.google.com/detail/claude/fcoeoabgfenejglbffodgkkbkcdhcgfn"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Claude in Chrome extension
+            </a>
+            , then run <code>/chrome</code> inside Claude Code and select "Enabled by default".
+          </p>
+        </div>
+      </details>
+
       {/* Tips */}
       <details class="setup-tips">
         <summary>
